@@ -13,6 +13,12 @@ namespace NundoTv_WebAPI
         {
             var builder = WebApplication.CreateBuilder(args);
 
+
+            // Add this line to handle Render's dynamic port assignment!
+            var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
+            builder.WebHost.ConfigureKestrel(options => options.ListenAnyIP(int.Parse(port)));
+
+
             string connectionString = builder.Configuration.GetConnectionString("Default")
                 ?? throw new InvalidOperationException("Connection String with name 'Default' does not exist");
 
