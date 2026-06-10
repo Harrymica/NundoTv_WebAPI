@@ -30,7 +30,7 @@ namespace NundoTv_WebAPI.Data
             // --- User ---
             modelBuilder.Entity<User>(entity =>
             {
-                entity.HasIndex(u => u.ClerkId).IsUnique();
+                entity.HasIndex(u => u.Email).IsUnique();
             });
 
             // Value converter: List<string> <-> JSON string for PostgreSQL jsonb columns

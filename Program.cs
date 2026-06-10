@@ -15,8 +15,8 @@ namespace NundoTv_WebAPI
 
 
             // Add this line to handle Render's dynamic port assignment!
-            var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
-            builder.WebHost.ConfigureKestrel(options => options.ListenAnyIP(int.Parse(port)));
+            // var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
+            // builder.WebHost.ConfigureKestrel(options => options.ListenAnyIP(int.Parse(port)));
 
 
             string connectionString = builder.Configuration.GetConnectionString("Default")
@@ -42,20 +42,31 @@ namespace NundoTv_WebAPI
 
             builder.Services.AddControllers();
 
-            // Clerk JWT Bearer Authentication
-            var clerkAuthority = builder.Configuration["Clerk:Authority"] ?? "";
-            builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-                .AddJwtBearer(options =>
+            // JWT Authentication
+            var jwtSettings = builder.Configuration.GetSection("Jwt");
+            var key = System.Text.Encoding.ASCII.GetBytes(jwtSettings["Secret"] ?? "YourSuperSecretKeyWithAtLeast32Characters!");
+
+            builder.Services.AddAuthentication(options =>
+            {
+                options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+                options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+            })
+            .AddJwtBearer(options =>
+            {
+                options.RequireHttpsMetadata = false; // Set to true in production
+                options.SaveToken = true;
+                options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
                 {
-                    options.Authority = clerkAuthority;
-                    options.TokenValidationParameters = new TokenValidationParameters
-                    {
-                        ValidateAudience = false,
-                        ValidateIssuer = true,
-                        ValidIssuer = clerkAuthority,
-                        NameClaimType = "sub"
-                    };
-                });
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey = new Microsoft.IdentityModel.Tokens.SymmetricSecurityKey(key),
+                    ValidateIssuer = true,
+                    ValidIssuer = jwtSettings["Issuer"],
+                    ValidateAudience = true,
+                    ValidAudience = jwtSettings["Audience"],
+                    ValidateLifetime = true,
+                    ClockSkew = TimeSpan.Zero
+                };
+            });
 
             // Swagger / OpenAPI
             builder.Services.AddEndpointsApiExplorer();
