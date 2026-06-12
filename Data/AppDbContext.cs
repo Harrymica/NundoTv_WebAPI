@@ -22,6 +22,7 @@ namespace NundoTv_WebAPI.Data
         public DbSet<User> Users => Set<User>();
         public DbSet<Interest> Interests => Set<Interest>();
         public DbSet<UserInterest> UserInterests => Set<UserInterest>();
+        public DbSet<LiveChannel> LiveChannels => Set<LiveChannel>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -159,6 +160,18 @@ namespace NundoTv_WebAPI.Data
                 .HasOne(ui => ui.Interest)
                 .WithMany(i => i.UserInterests)
                 .HasForeignKey(ui => ui.InterestId);
+
+            // --- LiveChannel ---
+            modelBuilder.Entity<LiveChannel>(entity =>
+            {
+                entity.HasKey(c => c.Id);
+
+                entity.Property(c => c.LanguagesRaw)
+                      .HasColumnType("text");
+
+                entity.Property(c => c.CategoriesRaw)
+                      .HasColumnType("text");
+            });
         }
     }
 }
