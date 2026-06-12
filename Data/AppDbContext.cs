@@ -23,6 +23,7 @@ namespace NundoTv_WebAPI.Data
         public DbSet<Interest> Interests => Set<Interest>();
         public DbSet<UserInterest> UserInterests => Set<UserInterest>();
         public DbSet<LiveChannel> LiveChannels => Set<LiveChannel>();
+        public DbSet<LivePremiumChannel> LivePremiumChannels => Set<LivePremiumChannel>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -163,6 +164,18 @@ namespace NundoTv_WebAPI.Data
 
             // --- LiveChannel ---
             modelBuilder.Entity<LiveChannel>(entity =>
+            {
+                entity.HasKey(c => c.Id);
+
+                entity.Property(c => c.LanguagesRaw)
+                      .HasColumnType("text");
+
+                entity.Property(c => c.CategoriesRaw)
+                      .HasColumnType("text");
+            });
+
+            // --- LivePremiumChannel ---
+            modelBuilder.Entity<LivePremiumChannel>(entity =>
             {
                 entity.HasKey(c => c.Id);
 

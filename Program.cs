@@ -15,8 +15,8 @@ namespace NundoTv_WebAPI
 
 
             // Add this line to handle Render's dynamic port assignment!
-            var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
-            builder.WebHost.ConfigureKestrel(options => options.ListenAnyIP(int.Parse(port)));
+            //var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
+            //builder.WebHost.ConfigureKestrel(options => options.ListenAnyIP(int.Parse(port)));
 
 
             string connectionString = builder.Configuration.GetConnectionString("Default")
@@ -48,8 +48,17 @@ namespace NundoTv_WebAPI
                 client.DefaultRequestHeaders.Add("User-Agent", "NundoTv-WebAPI/1.0 (Channel Aggregator)");
             });
 
+            builder.Services.AddHttpClient<LivePremiumChannelSyncService>(client =>
+            {
+                client.Timeout = TimeSpan.FromMinutes(10);
+                client.DefaultRequestHeaders.Add("Accept", "application/json");
+                client.DefaultRequestHeaders.Add("User-Agent", "NundoTv-WebAPI/1.0 (Premium Aggregator)");
+            });
+
             builder.Services.AddScoped<LiveChannelSyncService>();
+            builder.Services.AddScoped<LivePremiumChannelSyncService>();
             builder.Services.AddHostedService<LiveChannelBackgroundWorker>();
+            builder.Services.AddHostedService<LivePremiumChannelBackgroundWorker>();
 
             builder.Services.AddControllers();
 
