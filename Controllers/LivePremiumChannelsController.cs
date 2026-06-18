@@ -83,6 +83,37 @@ namespace NundoTv_WebAPI.Controllers
             });
         }
 
+        [HttpGet("search-by-name")]
+        public async Task<ActionResult<IEnumerable<LivePremiumChannel>>> SearchByName([FromQuery] string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return BadRequest(new { message = "Name parameter is required." });
+            }
+
+            var channels = await _db.LivePremiumChannels
+                .AsNoTracking()
+                .Where(c => EF.Functions.ILike(c.Name, $"%{name}%"))
+                .OrderBy(c => c.Name)
+                .ToListAsync();
+
+            return Ok(channels);
+        }
+
+        [HttpGet("countries")]
+        public async Task<ActionResult<IEnumerable<string>>> GetCountries()
+        {
+            var countries = await _db.LivePremiumChannels
+                .AsNoTracking()
+                .Where(c => !string.IsNullOrEmpty(c.Country))
+                .Select(c => c.Country)
+                .Distinct()
+                .OrderBy(c => c)
+                .ToListAsync();
+
+            return Ok(countries);
+        }
+
         [HttpGet("{id}")]
         public async Task<ActionResult<LivePremiumChannel>> GetChannel(string id)
         {
