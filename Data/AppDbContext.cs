@@ -24,6 +24,7 @@ namespace NundoTv_WebAPI.Data
         public DbSet<UserInterest> UserInterests => Set<UserInterest>();
         public DbSet<LiveChannel> LiveChannels => Set<LiveChannel>();
         public DbSet<LivePremiumChannel> LivePremiumChannels => Set<LivePremiumChannel>();
+        public DbSet<Featured> Featured => Set<Featured>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
