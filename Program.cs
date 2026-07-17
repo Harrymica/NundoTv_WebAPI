@@ -60,6 +60,14 @@ namespace NundoTv_WebAPI
             builder.Services.AddHostedService<LiveChannelBackgroundWorker>();
             builder.Services.AddHostedService<LivePremiumChannelBackgroundWorker>();
 
+            // EPG Background Service
+            builder.Services.AddHttpClient<EpgSyncService>(client =>
+            {
+                client.Timeout = TimeSpan.FromMinutes(10);
+                client.DefaultRequestHeaders.Add("User-Agent", "NundoTv-WebAPI/1.0 (EPG Sync)");
+            });
+            builder.Services.AddHostedService<EpgSyncService>();
+
             builder.Services.AddControllers();
 
             // JWT Authentication

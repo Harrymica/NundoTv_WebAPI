@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using NundoTv_WebAPI.Data;
@@ -11,9 +12,11 @@ using NundoTv_WebAPI.Data;
 namespace NundoTv_WebAPI.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260712210912_AddChannelNameToEpgProgram")]
+    partial class AddChannelNameToEpgProgram
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -351,35 +354,6 @@ namespace NundoTv_WebAPI.Migrations
                     b.HasIndex("ChannelId");
 
                     b.ToTable("ChannelLogos");
-                });
-
-            modelBuilder.Entity("NundoTv_WebAPI.Models.EpgChannelMapping", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("ChannelId")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("EpgChannelId")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ChannelId");
-
-                    b.HasIndex("EpgChannelId")
-                        .IsUnique();
-
-                    b.ToTable("EpgChannelMappings");
                 });
 
             modelBuilder.Entity("NundoTv_WebAPI.Models.EpgProgram", b =>

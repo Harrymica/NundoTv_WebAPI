@@ -25,6 +25,8 @@ namespace NundoTv_WebAPI.Data
         public DbSet<LiveChannel> LiveChannels => Set<LiveChannel>();
         public DbSet<LivePremiumChannel> LivePremiumChannels => Set<LivePremiumChannel>();
         public DbSet<Featured> Featured => Set<Featured>();
+        public DbSet<EpgProgram> EpgPrograms => Set<EpgProgram>();
+        public DbSet<EpgChannelMapping> EpgChannelMappings => Set<EpgChannelMapping>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -185,6 +187,20 @@ namespace NundoTv_WebAPI.Data
 
                 entity.Property(c => c.CategoriesRaw)
                       .HasColumnType("text");
+            });
+
+            // --- EpgProgram ---
+            modelBuilder.Entity<EpgProgram>(entity =>
+            {
+                entity.HasIndex(e => e.ChannelId);
+                entity.HasIndex(e => new { e.ChannelId, e.Start, e.Stop });
+            });
+
+            // --- EpgChannelMapping ---
+            modelBuilder.Entity<EpgChannelMapping>(entity =>
+            {
+                entity.HasIndex(m => m.ChannelId);
+                entity.HasIndex(m => m.EpgChannelId).IsUnique();
             });
         }
     }

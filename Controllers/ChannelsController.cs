@@ -148,6 +148,79 @@ namespace NundoTv_WebAPI.Controllers
             }
         }
 
+
+        [HttpGet("search-by-name/{name}")]
+        public async Task<ActionResult<List<Channel>>> GetchannelsbyName(string name)
+        {
+            if(name == null)
+            {
+                return BadRequest(403);
+            }
+
+            var ChannelQuery =  _db.Channels.AsNoTracking().Where(i => i.Name.Contains(name));
+
+            if (ChannelQuery == null)
+            {
+                return BadRequest(new { message = "Error: the featured channel was not found" });
+            }
+
+            var result =  await ChannelQuery.Select(channel => new 
+            {
+                ChannelId = channel.Id,
+                ChannelName = channel.Id,
+                Channellogo = _db.ChannelLogos.Where(s => s.ChannelId == channel.Id).Select(s => s.Url).ToList()
+            }).ToListAsync();
+
+            if (!result.Any())
+            {
+                return NotFound(new { message = "Error: No channels found matching that name." });
+            }
+            return Ok(result);
+        }
+
+        [HttpGet("getchannelsLogo")]
+        [ProducesResponseType(typeof(PaginatedResponse<ChannelLogo>), StatusCodes.Status200OK)]
+        public async Task<IActionResult> GetLogos(
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 20,
+            [FromQuery] string? search = null)
+        {
+            // 1. Guard rails for page indexing
+            if (page < 1) page = 1;
+            if (pageSize < 1) pageSize = 20;
+            if (pageSize > 100) pageSize = 100;
+
+            // 2. Build the initial query as IQueryable (doesn't execute on the DB yet)
+            IQueryable<ChannelLogo> query = _db.ChannelLogos.AsNoTracking().AsQueryable();
+
+            // 3. Optional: Add search filtering if a search term is provided
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                // Assuming ChannelLogo has a property you might want to search by, like a name or url
+                query = query.Where(l => EF.Functions.ILike(l.Url, $"%{search}%"));
+            }
+
+            // 4. Get total count of the filtered dataset
+            var totalCount = await query.CountAsync();
+
+            // 5. Apply pagination logic (Skip and Take)
+            var items = await query
+                .OrderBy(l => l.Id) // Adjust the property name to your primary key (e.g., Id, ChannelId, etc.)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .ToListAsync();
+
+            // 6. Return structured paginated envelope
+            return Ok(new PaginatedResponse<ChannelLogo>
+            {
+                Items = items,
+                TotalCount = totalCount,
+                Page = page,
+                PageSize = pageSize,
+                TotalPages = (int)Math.Ceiling(totalCount / (double)pageSize)
+            });
+        }
+
         /// <summary>
         /// Get all clean (non-blocked) channels with pagination.
         /// Channels with a stream URL are sorted first. Logos are populated from ChannelLogos.
@@ -499,4 +572,7 @@ namespace NundoTv_WebAPI.Controllers
         public int PageSize { get; set; }
         public int TotalPages { get; set; }
     }
+
+
+
 }
