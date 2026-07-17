@@ -147,6 +147,11 @@ namespace NundoTv_WebAPI.Services
                                 program.Description = await subReader.ReadElementContentAsStringAsync();
                             else if (subReader.Name == "category")
                                 program.Category = await subReader.ReadElementContentAsStringAsync();
+                            else if (subReader.Name == "icon")
+                            {
+                                program.IconUrl = subReader.GetAttribute("src");
+                                await subReader.ReadAsync(); // Advance past the empty icon element
+                            }
                         }
                     }
 

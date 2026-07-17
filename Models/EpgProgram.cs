@@ -25,6 +25,8 @@ namespace NundoTv_WebAPI.Models
 
         public string? Description { get; set; }
 
+        public string? IconUrl { get; set; }
+
         [MaxLength(256)]
         public string? Category { get; set; }
         
