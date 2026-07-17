@@ -62,7 +62,7 @@ namespace NundoTv_WebAPI.Controllers
         [HttpGet("channel/{identifier}")]
         public async Task<IActionResult> GetChannelSchedule(string identifier, [FromQuery] DateTime? date = null)
         {
-            var targetDate = date?.Date ?? DateTime.UtcNow.Date;
+            var targetDate = DateTime.SpecifyKind(date?.Date ?? DateTime.UtcNow.Date, DateTimeKind.Utc);
             var nextDate = targetDate.AddDays(1);
 
             var mappedId = await _context.EpgChannelMappings
@@ -100,7 +100,7 @@ namespace NundoTv_WebAPI.Controllers
 
             if (date.HasValue)
             {
-                var targetDate = date.Value.Date;
+                var targetDate = DateTime.SpecifyKind(date.Value.Date, DateTimeKind.Utc);
                 var nextDate = targetDate.AddDays(1);
                 query = query.Where(p => p.Start >= targetDate && p.Start < nextDate);
             }
