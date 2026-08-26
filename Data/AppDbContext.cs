@@ -27,6 +27,8 @@ namespace NundoTv_WebAPI.Data
         public DbSet<Featured> Featured => Set<Featured>();
         public DbSet<EpgProgram> EpgPrograms => Set<EpgProgram>();
         public DbSet<EpgChannelMapping> EpgChannelMappings => Set<EpgChannelMapping>();
+        public DbSet<Feedback> Feedbacks => Set<Feedback>();
+        public DbSet<SportsMatch> SportsMatches => Set<SportsMatch>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

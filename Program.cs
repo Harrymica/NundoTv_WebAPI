@@ -68,6 +68,14 @@ namespace NundoTv_WebAPI
             });
             builder.Services.AddHostedService<EpgSyncService>();
 
+            // Live Sports Aggregator & Scraper Background Service
+            builder.Services.AddHttpClient<SportsScraperService>(client =>
+            {
+                client.Timeout = TimeSpan.FromMinutes(5);
+                client.DefaultRequestHeaders.Add("Accept", "application/json");
+            });
+            builder.Services.AddHostedService<SportsScraperBackgroundWorker>();
+
             builder.Services.AddControllers();
 
             // JWT Authentication
