@@ -42,18 +42,18 @@ namespace NundoTv_WebAPI.Controllers
                     .ThenBy(m => m.CreatedAt)
                     .ToListAsync();
 
-                // If DB is currently empty (e.g. initial startup), run an on-demand sync
-                if (matches.Count == 0)
+                // If DB has no Score808 matches yet or list is empty, run an on-demand sync
+                if (matches.Count == 0 || !matches.Any(m => m.Id.StartsWith("score808")))
                 {
-                    await _scraperService.ScrapeAndSyncMatchesAsync();
-
+                    var freshlyScraped = await _scraperService.ScrapeAndSyncMatchesAsync();
+                    
                     matches = await dbQuery
                         .OrderByDescending(m => m.Status == "LIVE")
                         .ThenBy(m => m.CreatedAt)
                         .ToListAsync();
                 }
 
-                // Ensure all matches have valid stream URLs mapped to active sports channels if empty
+                // Ensure all matches have valid stream URLs
                 var activeSportsChannels = await _context.LivePremiumChannels
                     .AsNoTracking()
                     .Where(c => c.Name.ToLower().Contains("sport") || c.CategoriesRaw.ToLower().Contains("sport"))

@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using NundoTv_WebAPI.Data;
 using NundoTv_WebAPI.Services;
+using NundoTv_WebAPI.Services.ChannelResolvers;
 
 namespace NundoTv_WebAPI
 {
@@ -69,10 +70,32 @@ namespace NundoTv_WebAPI
             builder.Services.AddHostedService<EpgSyncService>();
 
             // Live Sports Aggregator & Scraper Background Service
+            builder.Services.AddHttpClient("StreamScraper", client =>
+            {
+                client.Timeout = TimeSpan.FromMinutes(2);
+                client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            });
+
+            builder.Services.AddHttpClient("HealthCheck", client =>
+            {
+                client.Timeout = TimeSpan.FromSeconds(5);
+                client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            });
+
+            builder.Services.AddSingleton<IStreamScraperService, StreamScraperService>();
+            builder.Services.AddHostedService<StreamScraperBackgroundWorker>();
+
+            // Channel Resolver Strategies
+            builder.Services.AddSingleton<IProviderChannelResolver, DaddyLiveResolver>();
+            builder.Services.AddSingleton<IProviderChannelResolver, StreamedSuResolver>();
+            builder.Services.AddSingleton<IProviderChannelResolver, Score808Resolver>();
+            builder.Services.AddSingleton<IChannelResolverService, ChannelResolverService>();
+
             builder.Services.AddHttpClient<SportsScraperService>(client =>
             {
                 client.Timeout = TimeSpan.FromMinutes(5);
-                client.DefaultRequestHeaders.Add("Accept", "application/json");
+                client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36");
+                client.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
             });
             builder.Services.AddHostedService<SportsScraperBackgroundWorker>();
 
@@ -135,6 +158,21 @@ namespace NundoTv_WebAPI
             }
 
             app.UseCors("AllowAll");
+
+            // Auto-apply EF Core database migrations on startup
+            using (var scope = app.Services.CreateScope())
+            {
+                try
+                {
+                    var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    dbContext.Database.Migrate();
+                }
+                catch (Exception ex)
+                {
+                    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+                    logger.LogError(ex, "An error occurred while applying EF Core database migrations.");
+                }
+            }
 
             if (!app.Environment.IsDevelopment())
             {

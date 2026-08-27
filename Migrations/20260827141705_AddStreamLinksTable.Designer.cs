@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using NundoTv_WebAPI.Data;
@@ -11,9 +12,11 @@ using NundoTv_WebAPI.Data;
 namespace NundoTv_WebAPI.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260827141705_AddStreamLinksTable")]
+    partial class AddStreamLinksTable
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -768,23 +771,13 @@ namespace NundoTv_WebAPI.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("ChannelResolverKey")
-                        .HasColumnType("text");
-
                     b.Property<bool>("IsOnline")
                         .HasColumnType("boolean");
 
                     b.Property<DateTime>("LastCheckedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<bool>("RequiresChannelSearch")
-                        .HasColumnType("boolean");
-
                     b.Property<string>("SiteName")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("StreamType")
                         .IsRequired()
                         .HasColumnType("text");
 

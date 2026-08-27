@@ -29,10 +29,19 @@ namespace NundoTv_WebAPI.Data
         public DbSet<EpgChannelMapping> EpgChannelMappings => Set<EpgChannelMapping>();
         public DbSet<Feedback> Feedbacks => Set<Feedback>();
         public DbSet<SportsMatch> SportsMatches => Set<SportsMatch>();
+        public DbSet<StreamLink> StreamLinks => Set<StreamLink>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
+
+            // --- StreamLink ---
+            modelBuilder.Entity<StreamLink>(entity =>
+            {
+                entity.HasKey(s => s.Id);
+                entity.HasIndex(s => s.TargetUrl).IsUnique();
+                entity.HasIndex(s => s.Category);
+            });
 
             // --- User ---
             modelBuilder.Entity<User>(entity =>
