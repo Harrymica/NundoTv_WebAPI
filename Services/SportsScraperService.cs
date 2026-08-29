@@ -394,9 +394,9 @@ namespace NundoTv_WebAPI.Services
         private async Task<List<SportsMatch>> ScrapeDaddyLiveMatchesAsync(CancellationToken ct)
         {
             var results = new List<SportsMatch>();
-            var scheduleDomains = new[] { "https://dlhd.so", "https://daddylive.mp", "https://dlhd.sx", "https://dlstreams.st" };
+            var scheduleDomains = new[] { "https://dlstreams.st", "https://dlhd.so", "https://daddylive.mp", "https://dlhd.sx", "https://daddylive.sx", "https://daddylive.me", "https://dlhd.uz" };
             string jsonString = "";
-            string workingDomain = "https://dlhd.so";
+            string workingDomain = "https://dlstreams.st";
 
             foreach (var domain in scheduleDomains)
             {
@@ -412,11 +412,19 @@ namespace NundoTv_WebAPI.Services
                     using var response = await _httpClient.SendAsync(request, ct);
                     if (response.IsSuccessStatusCode)
                     {
-                        jsonString = await response.Content.ReadAsStringAsync(ct);
-                        workingDomain = domain;
-                        break;
+                        var content = await response.Content.ReadAsStringAsync(ct);
+                        if (!string.IsNullOrWhiteSpace(content) && (content.TrimStart().StartsWith("{") || content.TrimStart().StartsWith("[")))
+                        {
+                            jsonString = content;
+                            workingDomain = domain;
+                            break;
+                        }
+                        _logger.LogWarning("DaddyLive schedule request to {Url} returned status 200 but content was not JSON (likely Cloudflare protection page).", targetUrl);
                     }
-                    _logger.LogWarning("DaddyLive schedule request to {Url} returned status: {StatusCode}", targetUrl, response.StatusCode);
+                    else
+                    {
+                        _logger.LogWarning("DaddyLive schedule request to {Url} returned status: {StatusCode}", targetUrl, response.StatusCode);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -551,12 +559,21 @@ namespace NundoTv_WebAPI.Services
                 var freshDaddyLiveIds = matches.Where(m => m.Id.StartsWith("daddylive")).Select(m => m.Id).ToHashSet();
                 var freshOtherIds = matches.Where(m => !m.Id.StartsWith("daddylive")).Select(m => m.Id).ToHashSet();
 
-                // Remove all old DaddyLive & Score808 matches that are NOT in the new scrape
-                var staleDaddyLive = existingMatches.Where(m => (m.Id.StartsWith("daddylive") || m.Id.StartsWith("score808")) && !freshDaddyLiveIds.Contains(m.Id)).ToList();
-                if (staleDaddyLive.Count > 0)
+                var staleDaddyLive = new List<SportsMatch>();
+
+                // Only remove stale DaddyLive & Score808 matches IF we successfully retrieved a non-empty fresh scrape set
+                if (freshDaddyLiveIds.Count > 0)
                 {
-                    _db.SportsMatches.RemoveRange(staleDaddyLive);
-                    _logger.LogInformation("Removed {Count} stale DaddyLive/Score808 matches no longer live.", staleDaddyLive.Count);
+                    staleDaddyLive = existingMatches.Where(m => (m.Id.StartsWith("daddylive") || m.Id.StartsWith("score808")) && !freshDaddyLiveIds.Contains(m.Id)).ToList();
+                    if (staleDaddyLive.Count > 0)
+                    {
+                        _db.SportsMatches.RemoveRange(staleDaddyLive);
+                        _logger.LogInformation("Removed {Count} stale DaddyLive/Score808 matches no longer live.", staleDaddyLive.Count);
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("DaddyLive scrape returned 0 fresh matches in this cycle. Skipping deletion of existing DaddyLive matches to preserve data.");
                 }
 
                 // Remove other-source matches older than 6 hours that aren't in the fresh scrape

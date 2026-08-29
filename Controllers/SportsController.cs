@@ -41,8 +41,9 @@ namespace NundoTv_WebAPI.Controllers
                 }
 
                 var matches = await dbQuery
-                    .OrderByDescending(m => m.Status == "LIVE")
-                    .ThenBy(m => m.CreatedAt)
+                    .OrderByDescending(m => m.Id.StartsWith("daddylive"))
+                    .ThenByDescending(m => m.Status == "LIVE")
+                    .ThenByDescending(m => m.CreatedAt)
                     .ToListAsync();
 
                 // If DB has no DaddyLive matches yet or list is empty, trigger a background sync (non-blocking)
@@ -74,6 +75,25 @@ namespace NundoTv_WebAPI.Controllers
             catch (Exception ex)
             {
                 return StatusCode(500, new { error = "An error occurred fetching live sports matches.", details = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// POST /api/sports/sync or /api/matches/sync
+        /// Triggers an immediate scrape and database sync of live sports matches from DaddyLive.
+        /// </summary>
+        [HttpPost("sports/sync")]
+        [HttpPost("matches/sync")]
+        public async Task<IActionResult> TriggerSportsSync()
+        {
+            try
+            {
+                var matches = await _scraperService.ScrapeAndSyncMatchesAsync();
+                return Ok(new { success = true, count = matches.Count, message = "Live sports match scrape completed.", matches });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { error = "Sports sync failed", details = ex.Message });
             }
         }
 
