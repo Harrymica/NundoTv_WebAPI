@@ -1,8 +1,10 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using HtmlAgilityPack;
 using Microsoft.EntityFrameworkCore;
 using NundoTv_WebAPI.Data;
 using NundoTv_WebAPI.Models;
+using NundoTv_WebAPI.Services.ChannelResolvers;
 
 namespace NundoTv_WebAPI.Services
 {
@@ -11,6 +13,7 @@ namespace NundoTv_WebAPI.Services
         private readonly HttpClient _httpClient;
         private readonly AppDbContext _db;
         private readonly ILogger<SportsScraperService> _logger;
+        private readonly DaddyLiveResolver _daddyLiveResolver;
         private static readonly Random _random = new Random();
 
         // User-Agent Pool for rotation to prevent scraper blocking
@@ -24,11 +27,12 @@ namespace NundoTv_WebAPI.Services
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0"
         };
 
-        public SportsScraperService(HttpClient httpClient, AppDbContext db, ILogger<SportsScraperService> logger)
+        public SportsScraperService(HttpClient httpClient, AppDbContext db, ILogger<SportsScraperService> logger, DaddyLiveResolver daddyLiveResolver)
         {
             _httpClient = httpClient;
             _db = db;
             _logger = logger;
+            _daddyLiveResolver = daddyLiveResolver;
         }
 
         private string GetRandomUserAgent()
@@ -51,20 +55,33 @@ namespace NundoTv_WebAPI.Services
             // 1. Fetch available Sports channels from DB for fallback/mapping
             var availableSportsStreams = await GetAvailableSportsChannelStreamsAsync(ct);
 
-            // 2. Execute Scraping Source 1: Score808hd Live Matches Scraper
+            // 2. Execute Scraping Source 1: DaddyLive Live Matches & Schedule Scraper
             try
             {
-                await ApplyRateLimitingAsync();
-                var score808Matches = await ScrapeScore808hdMatchesAsync(ct);
-                if (score808Matches.Count > 0)
+                var daddyLiveMatches = await ScrapeDaddyLiveMatchesAsync(ct);
+                if (daddyLiveMatches.Count > 0)
                 {
-                    scrapedMatches.AddRange(score808Matches);
-                    _logger.LogInformation("Extracted {Count} live matches from Score808hd.", score808Matches.Count);
+                    scrapedMatches.AddRange(daddyLiveMatches);
+                    _logger.LogInformation("Extracted {Count} live matches from DaddyLive Schedule.", daddyLiveMatches.Count);
+                    
+                    // Save DaddyLive matches immediately so API endpoint can serve them right away
+                    await SaveMatchesToDatabaseAsync(scrapedMatches, ct);
+
+                    // Fast logo enrichment (limited lookups)
+                    try
+                    {
+                        await EnrichMatchLogosAsync(daddyLiveMatches, ct);
+                        await SaveMatchesToDatabaseAsync(scrapedMatches, ct);
+                    }
+                    catch (Exception logoEx)
+                    {
+                        _logger.LogWarning(logoEx, "Logo enrichment completed with partial results.");
+                    }
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error occurred during Score808hd Sports Scraping step.");
+                _logger.LogError(ex, "Error occurred during DaddyLive Sports Scraping step.");
             }
 
             // 3. Execute Scraping Source 2: Real-Time Sports Fixture & Stream API Engine
@@ -83,6 +100,7 @@ namespace NundoTv_WebAPI.Services
                         }
                     }
                     _logger.LogInformation("Extracted {Count} live matches from Primary Fixture Aggregator.", matchesFromApi.Count);
+                    await SaveMatchesToDatabaseAsync(scrapedMatches, ct);
                 }
             }
             catch (Exception ex)
@@ -105,21 +123,12 @@ namespace NundoTv_WebAPI.Services
                             scrapedMatches.Add(m);
                         }
                     }
+                    await SaveMatchesToDatabaseAsync(scrapedMatches, ct);
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error occurred during HtmlAgilityPack Sports Scraping step.");
-            }
-
-            // 5. Save/Upsert into Database
-            if (scrapedMatches.Count > 0)
-            {
-                await SaveMatchesToDatabaseAsync(scrapedMatches, ct);
-            }
-            else
-            {
-                _logger.LogWarning("No new matches extracted during scraping pipeline execution.");
             }
 
             return scrapedMatches;
@@ -382,137 +391,145 @@ namespace NundoTv_WebAPI.Services
             return results;
         }
 
-        private async Task<List<SportsMatch>> ScrapeScore808hdMatchesAsync(CancellationToken ct)
+        private async Task<List<SportsMatch>> ScrapeDaddyLiveMatchesAsync(CancellationToken ct)
         {
             var results = new List<SportsMatch>();
-            var baseUrls = new[] { "https://a1.score808hd.tv", "https://score808hd.tv" };
-            string? workingBaseUrl = null;
-            string htmlString = "";
+            var scheduleDomains = new[] { "https://dlhd.so", "https://daddylive.mp", "https://dlhd.sx", "https://dlstreams.st" };
+            string jsonString = "";
+            string workingDomain = "https://dlhd.so";
 
-            foreach (var baseUrl in baseUrls)
+            foreach (var domain in scheduleDomains)
             {
-                string targetUrl = $"{baseUrl}/football";
+                string targetUrl = $"{domain}/schedule/schedule-generated.json";
                 try
                 {
-                    _logger.LogInformation("Scraping Score808hd live matches from {Url}...", targetUrl);
+                    _logger.LogInformation("Fetching DaddyLive schedule JSON from {Url}...", targetUrl);
                     using var request = new HttpRequestMessage(HttpMethod.Get, targetUrl);
-                    request.Headers.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36");
-                    request.Headers.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+                    request.Headers.UserAgent.ParseAdd(GetRandomUserAgent());
+                    request.Headers.Add("Accept", "application/json, text/plain, */*");
+                    request.Headers.Referrer = new Uri($"{domain}/");
 
                     using var response = await _httpClient.SendAsync(request, ct);
                     if (response.IsSuccessStatusCode)
                     {
-                        htmlString = await response.Content.ReadAsStringAsync(ct);
-                        workingBaseUrl = baseUrl;
+                        jsonString = await response.Content.ReadAsStringAsync(ct);
+                        workingDomain = domain;
                         break;
                     }
-                    _logger.LogWarning("Score808hd request to {Url} returned status: {StatusCode}", targetUrl, response.StatusCode);
+                    _logger.LogWarning("DaddyLive schedule request to {Url} returned status: {StatusCode}", targetUrl, response.StatusCode);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Failed to request Score808hd at {Url}", targetUrl);
+                    _logger.LogWarning(ex, "Failed to fetch DaddyLive schedule from {Url}", targetUrl);
                 }
             }
 
-            if (string.IsNullOrEmpty(workingBaseUrl) || string.IsNullOrEmpty(htmlString))
+            if (string.IsNullOrEmpty(jsonString))
             {
                 return results;
             }
 
             try
             {
-                var doc = new HtmlDocument();
-                doc.LoadHtml(htmlString);
+                using var doc = JsonDocument.Parse(jsonString);
+                var root = doc.RootElement;
 
-                var linkNodes = doc.DocumentNode.SelectNodes("//a[contains(@href, '/links/')]");
-                if (linkNodes == null || linkNodes.Count == 0)
+                foreach (var headerProp in root.EnumerateObject())
                 {
-                    _logger.LogWarning("No match links found on Score808hd page.");
-                    return results;
-                }
+                    var categoryObj = headerProp.Value;
+                    if (categoryObj.ValueKind != JsonValueKind.Object) continue;
 
-                var matchSlugs = new HashSet<string>();
-
-                foreach (var linkNode in linkNodes)
-                {
-                    string href = linkNode.GetAttributeValue("href", "").Trim();
-                    if (string.IsNullOrWhiteSpace(href)) continue;
-
-                    string fullMatchUrl = href.StartsWith("http") ? href : new Uri(new Uri(workingBaseUrl), href).ToString();
-                    string slug = href.Split(new[] { "/links/" }, StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? href;
-
-                    if (matchSlugs.Contains(slug)) continue;
-                    matchSlugs.Add(slug);
-
-                    // Parse team names from slug (e.g. barcelona-vs-athletic-bilbao)
-                    string homeTeam = "Home Team";
-                    string awayTeam = "Away Team";
-                    if (slug.Contains("-vs-"))
+                    foreach (var categoryProp in categoryObj.EnumerateObject())
                     {
-                        var parts = slug.Split(new[] { "-vs-" }, StringSplitOptions.RemoveEmptyEntries);
-                        if (parts.Length >= 2)
+                        string rawCategory = categoryProp.Name.Replace("</span>", "").Trim();
+                        var eventsArray = categoryProp.Value;
+                        if (eventsArray.ValueKind != JsonValueKind.Array) continue;
+
+                        foreach (var evt in eventsArray.EnumerateArray())
                         {
-                            homeTeam = System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(parts[0].Replace("-", " "));
-                            awayTeam = System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(parts[1].Replace("-", " "));
-                        }
-                    }
-
-                    // Scrape individual match page to extract stream links & details
-                    string primaryStreamUrl = fullMatchUrl;
-                    string status = "LIVE";
-                    string kickOffTime = "🔴 LIVE";
-                    string league = "Score808 Live Football";
-
-                    try
-                    {
-                        using var matchReq = new HttpRequestMessage(HttpMethod.Get, fullMatchUrl);
-                        matchReq.Headers.UserAgent.ParseAdd(GetRandomUserAgent());
-                        using var matchResp = await _httpClient.SendAsync(matchReq, ct);
-                        if (matchResp.IsSuccessStatusCode)
-                        {
-                            string matchHtml = await matchResp.Content.ReadAsStringAsync(ct);
-                            var matchDoc = new HtmlDocument();
-                            matchDoc.LoadHtml(matchHtml);
-
-                            // Find stream player links (hitcast, embed, totwatch, totview, etc.)
-                            var streamLinks = matchDoc.DocumentNode.SelectNodes("//a[contains(@href, 'hitcast.st') or contains(@href, 'totwatch') or contains(@href, 'totview') or contains(@href, 'embed') or contains(@href, 'streame') or contains(@href, 'daddylive')]");
-                            if (streamLinks != null && streamLinks.Count > 0)
+                            try
                             {
-                                string extractedHref = streamLinks[0].GetAttributeValue("href", "").Trim();
-                                if (!string.IsNullOrWhiteSpace(extractedHref))
+                                string eventTitle = evt.TryGetProperty("event", out var eProp) ? eProp.GetString() ?? "" : "";
+                                string timeStr = evt.TryGetProperty("time", out var tProp) ? tProp.GetString() ?? "LIVE" : "LIVE";
+
+                                if (string.IsNullOrWhiteSpace(eventTitle)) continue;
+
+                                string channelId = "";
+                                string channelName = "";
+
+                                if (evt.TryGetProperty("channels", out var chanArray) && chanArray.ValueKind == JsonValueKind.Array && chanArray.GetArrayLength() > 0)
                                 {
-                                    primaryStreamUrl = extractedHref;
+                                    var firstChan = chanArray[0];
+                                    channelId = firstChan.TryGetProperty("channel_id", out var idP) ? idP.GetString() ?? "" : "";
+                                    channelName = firstChan.TryGetProperty("channel_name", out var nP) ? nP.GetString() ?? "" : "";
                                 }
+                                else if (evt.TryGetProperty("channels2", out var chanArray2) && chanArray2.ValueKind == JsonValueKind.Array && chanArray2.GetArrayLength() > 0)
+                                {
+                                    var firstChan = chanArray2[0];
+                                    channelId = firstChan.TryGetProperty("channel_id", out var idP) ? idP.GetString() ?? "" : "";
+                                    channelName = firstChan.TryGetProperty("channel_name", out var nP) ? nP.GetString() ?? "" : "";
+                                }
+
+                                if (string.IsNullOrEmpty(channelId)) continue;
+
+                                string homeTeam = eventTitle;
+                                string awayTeam = "";
+
+                                if (eventTitle.Contains(" vs ", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    var parts = Regex.Split(eventTitle, @"\s+vs\s+", RegexOptions.IgnoreCase);
+                                    if (parts.Length >= 2)
+                                    {
+                                        homeTeam = parts[0].Trim();
+                                        awayTeam = parts[1].Trim();
+                                    }
+                                }
+                                else if (eventTitle.Contains(" v ", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    var parts = Regex.Split(eventTitle, @"\s+v\s+", RegexOptions.IgnoreCase);
+                                    if (parts.Length >= 2)
+                                    {
+                                        homeTeam = parts[0].Trim();
+                                        awayTeam = parts[1].Trim();
+                                    }
+                                }
+
+                                // Store the DaddyLive stream page URL — .m3u8 resolution is deferred to on-demand playback
+                                string primaryStreamUrl = $"{workingDomain}/stream/stream-{channelId}.php";
+
+                                string safeTitle = Regex.Replace(eventTitle, @"[^a-zA-Z0-9]", "-").ToLower();
+                                if (safeTitle.Length > 30) safeTitle = safeTitle.Substring(0, 30);
+                                string matchUniqueId = $"daddylive-{channelId}-{safeTitle}".TrimEnd('-');
+
+                                results.Add(new SportsMatch
+                                {
+                                    Id = matchUniqueId,
+                                    HomeTeam = homeTeam,
+                                    AwayTeam = awayTeam,
+                                    HomeLogo = "",
+                                    AwayLogo = "",
+                                    League = $"DaddyLive {rawCategory}",
+                                    KickOffTime = $"🔴 LIVE {timeStr}",
+                                    Status = "LIVE",
+                                    Score = "vs",
+                                    StreamUrl = primaryStreamUrl,
+                                    Category = rawCategory.Contains("Soccer", StringComparison.OrdinalIgnoreCase) ? "Football" : rawCategory,
+                                    CreatedAt = DateTime.UtcNow
+                                });
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "Error parsing DaddyLive event element.");
                             }
                         }
                     }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Failed parsing match page for {MatchUrl}", fullMatchUrl);
-                    }
-
-                    results.Add(new SportsMatch
-                    {
-                        Id = $"score808-{slug}",
-                        HomeTeam = homeTeam,
-                        AwayTeam = awayTeam,
-                        HomeLogo = "",
-                        AwayLogo = "",
-                        League = league,
-                        KickOffTime = kickOffTime,
-                        Status = status,
-                        Score = "vs",
-                        StreamUrl = primaryStreamUrl,
-                        Category = "Football",
-                        CreatedAt = DateTime.UtcNow
-                    });
                 }
 
-                _logger.LogInformation("Successfully extracted {Count} live matches from Score808hd.", results.Count);
+                _logger.LogInformation("Successfully extracted {Count} live matches from DaddyLive Schedule JSON.", results.Count);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error occurred while scraping Score808hd.");
+                _logger.LogError(ex, "Error occurred while parsing DaddyLive schedule JSON.");
             }
 
             return results;
@@ -524,35 +541,38 @@ namespace NundoTv_WebAPI.Services
             {
                 _logger.LogInformation("Syncing {Count} scraped sports matches into database (full replace)...", matches.Count);
 
+                // Deduplicate incoming matches by Id
+                matches = matches.GroupBy(m => m.Id).Select(g => g.First()).ToList();
+
                 // Get all existing matches
                 var existingMatches = await _db.SportsMatches.ToListAsync(ct);
 
-                // Separate Score808 matches from other sources
-                var freshScore808Ids = matches.Where(m => m.Id.StartsWith("score808")).Select(m => m.Id).ToHashSet();
-                var freshOtherIds = matches.Where(m => !m.Id.StartsWith("score808")).Select(m => m.Id).ToHashSet();
+                // Separate DaddyLive matches from other sources
+                var freshDaddyLiveIds = matches.Where(m => m.Id.StartsWith("daddylive")).Select(m => m.Id).ToHashSet();
+                var freshOtherIds = matches.Where(m => !m.Id.StartsWith("daddylive")).Select(m => m.Id).ToHashSet();
 
-                // Remove all old Score808 matches that are NOT in the new scrape
-                var staleScore808 = existingMatches.Where(m => m.Id.StartsWith("score808") && !freshScore808Ids.Contains(m.Id)).ToList();
-                if (staleScore808.Count > 0)
+                // Remove all old DaddyLive & Score808 matches that are NOT in the new scrape
+                var staleDaddyLive = existingMatches.Where(m => (m.Id.StartsWith("daddylive") || m.Id.StartsWith("score808")) && !freshDaddyLiveIds.Contains(m.Id)).ToList();
+                if (staleDaddyLive.Count > 0)
                 {
-                    _db.SportsMatches.RemoveRange(staleScore808);
-                    _logger.LogInformation("Removed {Count} stale Score808 matches no longer live.", staleScore808.Count);
+                    _db.SportsMatches.RemoveRange(staleDaddyLive);
+                    _logger.LogInformation("Removed {Count} stale DaddyLive/Score808 matches no longer live.", staleDaddyLive.Count);
                 }
 
                 // Remove other-source matches older than 6 hours that aren't in the fresh scrape
                 var cutoff = DateTime.UtcNow.AddHours(-6);
                 var staleOther = existingMatches
-                    .Where(m => !m.Id.StartsWith("score808") && m.CreatedAt < cutoff && !freshOtherIds.Contains(m.Id))
+                    .Where(m => !m.Id.StartsWith("daddylive") && !m.Id.StartsWith("score808") && m.CreatedAt < cutoff && !freshOtherIds.Contains(m.Id))
                     .ToList();
                 if (staleOther.Count > 0)
                 {
                     _db.SportsMatches.RemoveRange(staleOther);
-                    _logger.LogInformation("Removed {Count} expired non-Score808 matches (older than 6h).", staleOther.Count);
+                    _logger.LogInformation("Removed {Count} expired non-DaddyLive matches (older than 6h).", staleOther.Count);
                 }
 
                 // Upsert fresh matches
                 var existingDict = existingMatches
-                    .Where(m => !staleScore808.Contains(m) && !staleOther.Contains(m))
+                    .Where(m => !staleDaddyLive.Contains(m) && !staleOther.Contains(m))
                     .GroupBy(m => m.Id)
                     .ToDictionary(g => g.Key, g => g.First());
 
@@ -586,6 +606,108 @@ namespace NundoTv_WebAPI.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error saving scraped sports matches to database.");
+            }
+        }
+
+        /// <summary>
+        /// Enriches matches that have empty HomeLogo/AwayLogo by looking up team logos
+        /// via the ESPN Teams Search API (free, public, no auth required).
+        /// </summary>
+        private async Task EnrichMatchLogosAsync(List<SportsMatch> matches, CancellationToken ct)
+        {
+            // Cache: team name -> logo URL to avoid duplicate API calls
+            var logoCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            int maxLookups = 20;
+            int lookupCount = 0;
+
+            foreach (var match in matches)
+            {
+                if (ct.IsCancellationRequested || lookupCount >= maxLookups) break;
+
+                try
+                {
+                    // Only enrich if logo is missing
+                    if (string.IsNullOrWhiteSpace(match.HomeLogo))
+                    {
+                        match.HomeLogo = await LookupTeamLogoAsync(match.HomeTeam, logoCache, ct);
+                        lookupCount++;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(match.AwayLogo) && lookupCount < maxLookups)
+                    {
+                        match.AwayLogo = await LookupTeamLogoAsync(match.AwayTeam, logoCache, ct);
+                        lookupCount++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to enrich logos for match {Home} vs {Away}", match.HomeTeam, match.AwayTeam);
+                }
+            }
+
+            _logger.LogInformation("Logo enrichment complete. Cache contains {Count} team logos.", logoCache.Count);
+        }
+
+        private async Task<string> LookupTeamLogoAsync(string teamName, Dictionary<string, string> cache, CancellationToken ct)
+        {
+            if (string.IsNullOrWhiteSpace(teamName) || teamName == "Home Team" || teamName == "Away Team")
+                return "";
+
+            // Check cache first
+            if (cache.TryGetValue(teamName, out var cachedLogo))
+                return cachedLogo;
+
+            try
+            {
+                // ESPN Teams Search API — searches across all soccer leagues
+                string searchUrl = $"https://site.api.espn.com/apis/site/v2/sports/soccer/all/teams?search={Uri.EscapeDataString(teamName)}&limit=1";
+
+                using var request = new HttpRequestMessage(HttpMethod.Get, searchUrl);
+                request.Headers.UserAgent.ParseAdd(GetRandomUserAgent());
+                request.Headers.Add("Accept", "application/json");
+
+                using var response = await _httpClient.SendAsync(request, ct);
+                if (!response.IsSuccessStatusCode)
+                {
+                    cache[teamName] = "";
+                    return "";
+                }
+
+                var json = await response.Content.ReadAsStringAsync(ct);
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+
+                // Navigate: root.sports[0].leagues[0].teams[0].team.logos[0].href
+                if (root.TryGetProperty("sports", out var sports) && sports.GetArrayLength() > 0)
+                {
+                    var sport = sports[0];
+                    if (sport.TryGetProperty("leagues", out var leagues) && leagues.GetArrayLength() > 0)
+                    {
+                        var league = leagues[0];
+                        if (league.TryGetProperty("teams", out var teams) && teams.GetArrayLength() > 0)
+                        {
+                            var teamObj = teams[0];
+                            if (teamObj.TryGetProperty("team", out var team))
+                            {
+                                if (team.TryGetProperty("logos", out var logos) && logos.GetArrayLength() > 0)
+                                {
+                                    string logoUrl = logos[0].TryGetProperty("href", out var href) ? href.GetString() ?? "" : "";
+                                    cache[teamName] = logoUrl;
+                                    return logoUrl;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                cache[teamName] = "";
+                return "";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "ESPN team logo lookup failed for: {Team}", teamName);
+                cache[teamName] = "";
+                return "";
             }
         }
     }

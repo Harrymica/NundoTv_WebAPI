@@ -67,7 +67,10 @@ namespace NundoTv_WebAPI
                 client.Timeout = TimeSpan.FromMinutes(10);
                 client.DefaultRequestHeaders.Add("User-Agent", "NundoTv-WebAPI/1.0 (EPG Sync)");
             });
-            builder.Services.AddHostedService<EpgSyncService>();
+            // builder.Services.AddHostedService<EpgSyncService>(); // PAUSED — re-enable when needed
+
+            // Suppress noisy Entity Framework SQL command logging (INSERT floods)
+            builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);
 
             // Live Sports Aggregator & Scraper Background Service
             builder.Services.AddHttpClient("StreamScraper", client =>
@@ -86,10 +89,13 @@ namespace NundoTv_WebAPI
             builder.Services.AddHostedService<StreamScraperBackgroundWorker>();
 
             // Channel Resolver Strategies
+            builder.Services.AddSingleton<DaddyLiveResolver>();
             builder.Services.AddSingleton<IProviderChannelResolver, DaddyLiveResolver>();
             builder.Services.AddSingleton<IProviderChannelResolver, StreamedSuResolver>();
             builder.Services.AddSingleton<IProviderChannelResolver, Score808Resolver>();
+            builder.Services.AddSingleton<Score808Resolver>();
             builder.Services.AddSingleton<IChannelResolverService, ChannelResolverService>();
+            builder.Services.AddSingleton<IPdfExportService, PdfExportService>();
 
             builder.Services.AddHttpClient<SportsScraperService>(client =>
             {

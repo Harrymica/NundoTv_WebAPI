@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using NundoTv_WebAPI.Data;
 using NundoTv_WebAPI.Models;
 using NundoTv_WebAPI.Services;
+using NundoTv_WebAPI.Services.ChannelResolvers;
 
 namespace NundoTv_WebAPI.Controllers
 {
@@ -12,11 +13,13 @@ namespace NundoTv_WebAPI.Controllers
     {
         private readonly AppDbContext _context;
         private readonly SportsScraperService _scraperService;
+        private readonly DaddyLiveResolver _daddyLiveResolver;
 
-        public SportsController(AppDbContext context, SportsScraperService scraperService)
+        public SportsController(AppDbContext context, SportsScraperService scraperService, DaddyLiveResolver daddyLiveResolver)
         {
             _context = context;
             _scraperService = scraperService;
+            _daddyLiveResolver = daddyLiveResolver;
         }
 
         /// <summary>
@@ -42,45 +45,28 @@ namespace NundoTv_WebAPI.Controllers
                     .ThenBy(m => m.CreatedAt)
                     .ToListAsync();
 
-                // If DB has no Score808 matches yet or list is empty, run an on-demand sync
-                if (matches.Count == 0 || !matches.Any(m => m.Id.StartsWith("score808")))
+                // If DB has no DaddyLive matches yet or list is empty, trigger a background sync (non-blocking)
+                if (matches.Count == 0 || !matches.Any(m => m.Id.StartsWith("daddylive")))
                 {
-                    var freshlyScraped = await _scraperService.ScrapeAndSyncMatchesAsync();
-                    
-                    matches = await dbQuery
-                        .OrderByDescending(m => m.Status == "LIVE")
-                        .ThenBy(m => m.CreatedAt)
-                        .ToListAsync();
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await _scraperService.ScrapeAndSyncMatchesAsync();
+                        }
+                        catch { }
+                    });
                 }
 
                 // Ensure all matches have valid stream URLs
-                var activeSportsChannels = await _context.LivePremiumChannels
-                    .AsNoTracking()
-                    .Where(c => c.Name.ToLower().Contains("sport") || c.CategoriesRaw.ToLower().Contains("sport"))
-                    .Select(c => c.StreamUrl)
-                    .ToListAsync();
+                string defaultStream = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
 
-                if (activeSportsChannels.Count == 0)
-                {
-                    activeSportsChannels = await _context.LiveChannels
-                        .AsNoTracking()
-                        .Where(c => c.Name.ToLower().Contains("sport") || c.CategoriesRaw.ToLower().Contains("sport"))
-                        .Select(c => c.StreamUrl)
-                        .ToListAsync();
-                }
-
-                string defaultStream = activeSportsChannels.FirstOrDefault() ?? "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
-
-                int idx = 0;
                 foreach (var match in matches)
                 {
                     if (string.IsNullOrEmpty(match.StreamUrl))
                     {
-                        match.StreamUrl = activeSportsChannels.Count > 0
-                            ? activeSportsChannels[idx % activeSportsChannels.Count]
-                            : defaultStream;
+                        match.StreamUrl = defaultStream;
                     }
-                    idx++;
                 }
 
                 return Ok(matches);
@@ -92,21 +78,32 @@ namespace NundoTv_WebAPI.Controllers
         }
 
         /// <summary>
-        /// POST /api/sports/scrape
-        /// Triggers an immediate scrape execution
+        /// GET /api/sports/resolve?url=... or ?channelId=...
+        /// Resolves a DaddyLive stream page URL or channel ID to a direct ad-free .m3u8 stream URL.
         /// </summary>
-        [HttpPost("sports/scrape")]
-        public async Task<IActionResult> TriggerScrape()
+        [HttpGet("sports/resolve")]
+        [HttpGet("matches/resolve")]
+        public async Task<IActionResult> ResolveStream([FromQuery] string? url = null, [FromQuery] string? channelId = null)
         {
+            string target = url ?? channelId ?? "";
+            if (string.IsNullOrWhiteSpace(target))
+            {
+                return BadRequest(new { error = "Either url or channelId parameter is required." });
+            }
+
             try
             {
-                var matches = await _scraperService.ScrapeAndSyncMatchesAsync();
-                
-                return Ok(new { message = "Live sports match scrape completed successfully.", count = matches.Count, matches });
+                var directM3u8 = await _daddyLiveResolver.ResolveDirectM3u8Async(target);
+                if (!string.IsNullOrEmpty(directM3u8))
+                {
+                    return Ok(new { success = true, streamUrl = directM3u8 });
+                }
+
+                return Ok(new { success = false, message = "Could not resolve direct .m3u8 stream", originalUrl = target });
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { error = "Scrape failed", details = ex.Message });
+                return StatusCode(500, new { error = "Stream resolution failed", details = ex.Message });
             }
         }
     }

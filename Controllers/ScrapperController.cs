@@ -157,5 +157,49 @@ namespace NundoTv_WebAPI.Controllers
                 return StatusCode(500, new { Error = "Failed to fetch Score808hd matches.", Details = ex.Message });
             }
         }
+
+        [HttpGet("streams/pdf")]
+        [HttpGet("download-pdf")]
+        public async Task<IActionResult> DownloadStreamsPdf(
+            [FromServices] IPdfExportService pdfExportService,
+            [FromQuery] string? category,
+            [FromQuery] string? search,
+            [FromQuery] bool? isOnline,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                var query = _dbContext.StreamLinks.AsNoTracking().AsQueryable();
+
+                if (!string.IsNullOrWhiteSpace(category))
+                {
+                    query = query.Where(s => s.Category.ToLower().Contains(category.ToLower()));
+                }
+
+                if (!string.IsNullOrWhiteSpace(search))
+                {
+                    query = query.Where(s => s.SiteName.ToLower().Contains(search.ToLower()));
+                }
+
+                if (isOnline.HasValue)
+                {
+                    query = query.Where(s => s.IsOnline == isOnline.Value);
+                }
+
+                var streams = await query
+                    .OrderBy(s => s.Category)
+                    .ThenBy(s => s.SiteName)
+                    .ToListAsync(cancellationToken);
+
+                byte[] pdfBytes = pdfExportService.GenerateStreamLinksPdf(streams, "NundoTV Database Stream Links Directory");
+
+                string fileName = $"NundoTV_Stream_Links_{DateTime.UtcNow:yyyyMMdd_HHmmss}.pdf";
+                return File(pdfBytes, "application/pdf", fileName);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { Error = "Failed to generate stream links PDF.", Details = ex.Message });
+            }
+        }
     }
 }

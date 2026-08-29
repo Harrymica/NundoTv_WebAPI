@@ -60,17 +60,16 @@ namespace NundoTv_WebAPI.Services.ChannelResolvers
 
                         Uri baseUri = new Uri(fetchUrl);
                         Uri absoluteUri = new Uri(baseUri, href);
-                        string playableUrl = absoluteUri.ToString();
-
+                        string channelPageUrl = absoluteUri.ToString();
                         string channelId = ExtractChannelId(href);
 
-                        if (!channels.Any(c => c.PlayableUrl.Equals(playableUrl, StringComparison.OrdinalIgnoreCase)))
+                        if (!channels.Any(c => c.ChannelId.Equals(channelId, StringComparison.OrdinalIgnoreCase)))
                         {
                             channels.Add(new ChannelInfo
                             {
                                 ChannelId = channelId,
                                 ChannelName = cleanName,
-                                PlayableUrl = playableUrl,
+                                PlayableUrl = channelPageUrl,
                                 Category = "DaddyLive 24/7 Channels"
                             });
                         }
@@ -93,16 +92,16 @@ namespace NundoTv_WebAPI.Services.ChannelResolvers
 
                         Uri baseUri = new Uri(fetchUrl);
                         Uri absoluteUri = new Uri(baseUri, href);
-                        string playableUrl = absoluteUri.ToString();
+                        string channelPageUrl = absoluteUri.ToString();
                         string channelId = ExtractChannelId(href);
 
-                        if (!channels.Any(c => c.PlayableUrl.Equals(playableUrl, StringComparison.OrdinalIgnoreCase)))
+                        if (!channels.Any(c => c.ChannelId.Equals(channelId, StringComparison.OrdinalIgnoreCase)))
                         {
                             channels.Add(new ChannelInfo
                             {
                                 ChannelId = channelId,
                                 ChannelName = cleanName,
-                                PlayableUrl = playableUrl,
+                                PlayableUrl = channelPageUrl,
                                 Category = "DaddyLive 24/7 Channels"
                             });
                         }
@@ -111,10 +110,98 @@ namespace NundoTv_WebAPI.Services.ChannelResolvers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to resolve channels for DaddyLive at {Url}", targetUrl);
+                _logger.LogError(ex, "Failed to resolve channel list for DaddyLive at {Url}", targetUrl);
             }
 
             return channels;
+        }
+
+        /// <summary>
+        /// Resolves a DaddyLive channel ID or page URL to a direct ad-free .m3u8 HLS stream URL
+        /// by performing 2-step iframe extraction & base64 decoding of the Clappr player script.
+        /// </summary>
+        public async Task<string?> ResolveDirectM3u8Async(string channelIdOrUrl, CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                string channelId = ExtractChannelId(channelIdOrUrl);
+                var client = _httpClientFactory.CreateClient("StreamScraper");
+
+                var domains = new[] { "https://dlhd.so", "https://daddylive.mp", "https://dlhd.sx", "https://dlstreams.st" };
+                string? iframeSrc = null;
+                string workingDomain = "https://dlhd.so";
+
+                foreach (var domain in domains)
+                {
+                    try
+                    {
+                        string streamPageUrl = $"{domain}/stream/stream-{channelId}.php";
+                        using var req = new HttpRequestMessage(HttpMethod.Get, streamPageUrl);
+                        req.Headers.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36");
+                        req.Headers.Referrer = new Uri($"{domain}/");
+
+                        using var resp = await client.SendAsync(req, cancellationToken);
+                        if (resp.IsSuccessStatusCode)
+                        {
+                            string html = await resp.Content.ReadAsStringAsync(cancellationToken);
+                            var match = Regex.Match(html, @"iframe[^>]+src=[""']([^""']+)[""']", RegexOptions.IgnoreCase);
+                            if (match.Success)
+                            {
+                                iframeSrc = match.Groups[1].Value;
+                                workingDomain = domain;
+                                break;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed fetching stream page for channel {ChannelId} from {Domain}", channelId, domain);
+                    }
+                }
+
+                if (string.IsNullOrEmpty(iframeSrc))
+                {
+                    // Default fallback format for daddy.php embed
+                    iframeSrc = $"https://hamis.romponalis.st/premiumtv/daddy.php?id={channelId}";
+                }
+
+                // Fetch iframe player embed HTML
+                using var iframeReq = new HttpRequestMessage(HttpMethod.Get, iframeSrc);
+                iframeReq.Headers.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36");
+                iframeReq.Headers.Referrer = new Uri($"{workingDomain}/");
+
+                using var iframeResp = await client.SendAsync(iframeReq, cancellationToken);
+                if (!iframeResp.IsSuccessStatusCode)
+                {
+                    _logger.LogWarning("DaddyLive iframe embed page returned status: {Status}", iframeResp.StatusCode);
+                    return null;
+                }
+
+                string embedHtml = await iframeResp.Content.ReadAsStringAsync(cancellationToken);
+
+                // Extract base64 encoded m3u8 URL from window.atob('...')
+                var b64Match = Regex.Match(embedHtml, @"window\.atob\s*\(\s*['""]([A-Za-z0-9+/=]+)['""]\s*\)", RegexOptions.IgnoreCase);
+                if (b64Match.Success)
+                {
+                    string b64String = b64Match.Groups[1].Value;
+                    byte[] bytes = Convert.FromBase64String(b64String);
+                    string decodedUrl = System.Text.Encoding.UTF8.GetString(bytes).Trim();
+
+                    if (decodedUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogInformation("Successfully resolved direct .m3u8 for DaddyLive channel {ChannelId}: {Url}", channelId, decodedUrl);
+                        return decodedUrl;
+                    }
+                }
+
+                _logger.LogWarning("Base64 stream URL pattern not found in DaddyLive embed script for channel {ChannelId}", channelId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error resolving direct .m3u8 stream for DaddyLive channel/URL: {Target}", channelIdOrUrl);
+            }
+
+            return null;
         }
 
         private static string ExtractChannelId(string href)
@@ -124,7 +211,8 @@ namespace NundoTv_WebAPI.Services.ChannelResolvers
             {
                 return match.Groups[1].Value;
             }
-            return href.Trim('/');
+            return href.Trim('/').Split('/').LastOrDefault() ?? href;
         }
     }
 }
+
